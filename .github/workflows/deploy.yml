@@ -1,38 +1,65 @@
-name: Deploy to ECS
+name: Deploy to Amazon ECS
 
 on:
-  workflow_dispatch:
-
-env:
-  AWS_REGION: us-east-1
+  push:
+    branches:
+      - main
 
 permissions:
-  id-token: write
-  contents: read
+  id-token: write # Required for requesting the JWT OIDC token
+  contents: read # Required to checkout the repository
+
+env:
+  AWS_REGION: us-east-1 # Change to your AWS Region
+  ROLE_TO_ASSUME: arn:aws:iam::442042538786:role/GitHubActionsECSRole # Change to your IAM Role ARN
+  ECR_REPOSITORY: master-agent # Change to your Amazon ECR repo name
+  ECS_SERVICE: my-app-task-service # Change to your ECS service name
+  ECS_CLUSTER: sourav301-cluster # Change to your ECS cluster name
+  ECS_TASK_DEFINITION: .aws/task-definition.json # Path to your task definition file
+  CONTAINER_NAME: my-app-container # Name of the container in your task definition
 
 jobs:
   deploy:
+    name: Build & Deploy
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
-      - name: Configure AWS credentials (OIDC)
-        uses: aws-actions/configure-aws-credentials@cabfdba3510de1431bac9dba27511d97497fc100
+      - name: Configure AWS Credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          role-to-assume: ${{ env.ROLE_TO_ASSUME }}
           aws-region: ${{ env.AWS_REGION }}
+          audience: sts.amazonaws.com
 
-      - name: Verify AWS identity
-        run: aws sts get-caller-identity
+      - name: Log in to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Run deploy script
-        run: bash deploy.sh
-
-      - name: Get app URL
+      - name: Build, Tag, and Push Image to ECR
+        id: build-image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
         run: |
-          ALB_DNS=$(aws elbv2 describe-load-balancers --region ${{ env.AWS_REGION }} \
-            --names myagent-alb \
-            --query 'LoadBalancers[0].DNSName' --output text)
-          echo "App:  http://$ALB_DNS"
-          echo "Team URL: http://$ALB_DNS/chat?name=myname"
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
+
+      - name: Render New Task Definition
+        id: task-def
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: ${{ env.ECS_TASK_DEFINITION }}
+          container-name: ${{ env.CONTAINER_NAME }}
+          image: ${{ steps.build-image.outputs.image }}
+
+      - name: Deploy Amazon ECS Task Definition
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.task-def.outputs.task-definition }}
+          service: ${{ env.ECS_SERVICE }}
+          cluster: ${{ env.ECS_CLUSTER }}
+          wait-for-service-stability: true
