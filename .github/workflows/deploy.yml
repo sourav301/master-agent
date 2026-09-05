@@ -1,0 +1,38 @@
+name: Deploy to ECS
+
+on:
+  workflow_dispatch:
+
+env:
+  AWS_REGION: us-east-1
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@cabfdba3510de1431bac9dba27511d97497fc100
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Verify AWS identity
+        run: aws sts get-caller-identity
+
+      - name: Run deploy script
+        run: bash deploy.sh
+
+      - name: Get app URL
+        run: |
+          ALB_DNS=$(aws elbv2 describe-load-balancers --region ${{ env.AWS_REGION }} \
+            --names myagent-alb \
+            --query 'LoadBalancers[0].DNSName' --output text)
+          echo "App:  http://$ALB_DNS"
+          echo "Team URL: http://$ALB_DNS/chat?name=myname"
