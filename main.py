@@ -10,4 +10,4 @@ def health():
 
 @app.get("/chat")
 def chat(name: str = Query(..., description="Your name")):
-    return {"reply": f"hello {name}"}
+    return {"reply": f"hello  {name}"}
